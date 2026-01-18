@@ -16,7 +16,9 @@ Fs=250;% sampling rate
 chn=[52 53 55 56 57 58 61 62 63];
 % chn=1:64;
 % data lenght in seconds (0.5,1,1.5,2,2.5 and 3 were considered in our study)
+duration=2.5;
 time= linspace(0,6,1500);
+position= find(time>=0.5 & time<=0.5+duration); % index of EEG signal
 
 % design a band-pass butterworth filter
 [b,a]= butter(3,[8 90]/(Fs/2), 'bandpass');
@@ -29,66 +31,55 @@ fstim= freqs;
 y_true= repmat(1:40,1,6);
 %% Construct sine-cosine reference signal for each stimulus according to equation 2
 % number of harmonics
-%Nh=5;
-%Xref = mySinCosReference(fstim,duration,Nh,Fs);
-time_list = [0.5 1 1.5 2 2.5 3];
 Nh_list = 1:10;
-Acc_time = zeros(length(Nh_list), length(time_list), 35);
+Acc_vs_Nh = zeros(length(Nh_list), 35);  % harmonics × subjects
 
-%% SSVEP frequency detection using Standard CCA
-% For each Nh, rebuild reference signals
 for h = 1:length(Nh_list)
-    Nh = Nh_list(h); % update Nh for the current iteration
-    disp(['Processing Nh = ', num2str(Nh)])
-
-    for t = 1:length(time_list)
-        duration = time_list(t);
-        disp(['  Time window = ', num2str(duration), ' s'])
-        position= find(time>=0.5 & time<=0.5+duration); % index of EEG signal
-
-        Xref = mySinCosReference(fstim, duration, Nh, Fs); % rebuild reference signals
+    Nh = Nh_list(h);
+    Xref = mySinCosReference(fstim,duration,Nh,Fs);
+    %% SSVEP frequency detection using Standard CCA
+    for sbj=1:35
+        load(['C:\Users\marty\Desktop\BCI\Project\SSVEP-BCI-Data\S\S',num2str(sbj),'.mat'])
+        % concatenate all trials to costruct a 3 dimension matrix
+        EEGdata= cat(3,data(:,:,:,1),data(:,:,:,2),data(:,:,:,3),data(:,:,:,4),...
+            data(:,:,:,5),data(:,:,:,6));
+        clear data
     
-        for sbj=1:35
-            load(['C:\Users\marty\Desktop\BCI\Project\SSVEP-BCI-Data\S\S',num2str(sbj),'.mat'])
-            % concatenate all trials to costruct a 3 dimension matrix
-            EEGdata= cat(3,data(:,:,:,1),data(:,:,:,2),data(:,:,:,3),data(:,:,:,4),...
-                data(:,:,:,5),data(:,:,:,6));
-            clear data
-        
-            y_pred= zeros(1,size(EEGdata,3));
-            % frequency recognition
-            for i=1:size(EEGdata,3)
-                X= EEGdata(:,position,i)'; % EEG signal
-                % apply designed band-pass filter[8-90Hz]
-                X= filtfilt(b,a,X);
-
-                temp = zeros(1, size(Xref,3));
-
-                % calculate cannonical correlation between the EEG signal(X) and each of the reference signals(Xref)
-                for j= 1:size(Xref,3)
-                    [~,~,r] = myCCA(X(:,chn)',Xref(:,:,j));
-                    temp(j) = max(r);
-                end
-                [~, y_pred(i)] = max(temp);
+        y_pred= zeros(1,size(EEGdata,3));
+        % frequency recognition
+        for i=1:size(EEGdata,3)
+            X= EEGdata(:,position,i)'; % EEG signal
+            % apply designed band-pass filter[8-90Hz]
+            X= filtfilt(b,a,X);
+            % calculate cannonical correlation between the EEG signal(X) and each of the reference signals(Xref)
+            for j= 1:size(Xref,3)
+                [~,~,temp(:,j)] = myCCA(X(:,chn)',Xref(:,:,j));
             end
-            %% Performance evaluation
-            C= confusionmat(y_true,y_pred); %cunfusion matrix
-            Acc_vs_Nh(h,t,sbj) = sum(diag(C)) / sum(C(:)) * 100;
-            disp(['Accuracy = ', num2str(Acc_vs_Nh(h,t,sbj)), ' %'])
+            % calculates the maximum correlation between the EEG signal(X) and each of the reference signals(Xref)
+            Rho= max(temp);
+            % determine the the stimulus frequency of EEG signal(X)
+            [mx,ind]= max(Rho);
+            y_pred(i)= ind;
         end
+        %% Performance evaluation
+        C= confusionmat(y_true,y_pred); %cunfusion matrix
+        Accuracy(sbj)= sum(diag(C)) / sum(C(:)) *100; % accuracy
+        Acc_vs_Nh(h, sbj) = Accuracy(sbj);
+        disp(['Accuracy(',num2str(sbj),'): ', num2str(Accuracy(sbj)),' %'])
     end
 end
+plusminu=char(177);
+stderror= std( Accuracy ) / sqrt( length( Accuracy ));
+tderror= std( Accuracy ) / sqrt( length( Accuracy ));
+Ave_Acc_across_sbjs= mean(Accuracy );
+disp(['Average accuracy: ',num2str(mean(Accuracy))...
+    ,' ',plusminu,' ',num2str(stderror),' %'])
 
-meanAcc = mean(Acc_vs_Nh, 3); 
+meanAcc = mean(Acc_vs_Nh, 2);
+stdErr  = std(Acc_vs_Nh, [], 2) / sqrt(35);
 
-figure; hold on;
-for h = 1:length(Nh_list)
-    plot(time_list, meanAcc(h,:), '-o', 'LineWidth', 2, ...
-        'DisplayName', ['N_h = ', num2str(Nh_list(h))]);
-end
-
-xlabel('Time window length (s)');
+errorbar(Nh_list, meanAcc, stdErr, '-o','LineWidth',2);
+xlabel('Number of harmonics N_h');
 ylabel('Accuracy (%)');
-title('Accuracy vs Time for Different Numbers of Harmonics (CCA)');
-legend('Location','southeast');
 grid on;
+title('Effect of Number of Harmonics on CCA Performance');
